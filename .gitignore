@@ -1,6 +1,21 @@
 build/
 build_release/
+build_sanitizer/
+build_coverage/
+build_release_g16/
 *.txt
 *.py
 .DS_Store
 !CMakeLists.txt
+# Scratch test binaries
+test_utf8
+test_pool
+test_intrusive
+test_std_simd*
+test_rope*
+# Coverage artifacts
+coverage.profdata
+coverage.profraw
+lcov_html/
+lcov_report.info
+build_coverage/

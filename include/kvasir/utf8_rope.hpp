@@ -6,6 +6,7 @@
 #include "utf8_string.hpp"
 #include <iostream>
 #include "hash.hpp"
+#include <atomic>
 namespace kvasir {
 
     template<typename T>
@@ -60,6 +61,127 @@ private:
         intrusive_ptr<node> right;
         
         kvasir::utf8_string data;
+
+        // ── Lock-free two-level pool ─────────────────────────────────────────
+        // Fast path  : per-thread singly-linked list, no atomics.
+        // Overflow   : when the local list exceeds kDonateThreshold nodes, half
+        //              are pushed onto a global Treiber stack so other threads
+        //              (including those freeing cross-thread nodes) can reclaim them.
+        // Thread exit: pool_state destructor drains the local list into the global
+        //              stack, preventing permanent per-thread memory accumulation.
+        // ────────────────────────────────────────────────────────────────────
+
+        static constexpr size_t kDonateThreshold = 512;
+        static constexpr size_t kStealBatch       = 16;
+
+        // Global lock-free Treiber stack shared across all threads.
+        static std::atomic<void*>& global_pool() noexcept {
+            static std::atomic<void*> pool{nullptr};
+            return pool;
+        }
+
+        static void treiber_push(void* p) noexcept {
+            auto& gp = global_pool();
+            void* head = gp.load(std::memory_order_relaxed);
+            do {
+                *reinterpret_cast<void**>(p) = head;
+            } while (!gp.compare_exchange_weak(
+                         head, p,
+                         std::memory_order_release,
+                         std::memory_order_relaxed));
+        }
+
+        static void* treiber_pop() noexcept {
+            auto& gp = global_pool();
+            void* head = gp.load(std::memory_order_acquire);
+            while (head) {
+                void* next = *reinterpret_cast<void**>(head);
+                if (gp.compare_exchange_weak(
+                        head, next,
+                        std::memory_order_acquire,
+                        std::memory_order_relaxed))
+                    return head;
+            }
+            return nullptr;
+        }
+
+        // Per-thread cache state + destructor-based donation on thread exit.
+        struct pool_state {
+            void*  fast_list  = nullptr;
+            size_t fast_count = 0;
+
+            ~pool_state() noexcept {
+                // Donate all remaining local nodes to the global pool on exit.
+                while (fast_list) {
+                    void* next = *reinterpret_cast<void**>(fast_list);
+                    treiber_push(fast_list);
+                    fast_list = next;
+                }
+            }
+
+            static pool_state& get() noexcept {
+                thread_local pool_state ps;
+                return ps;
+            }
+        };
+
+        static void* operator new(size_t size) {
+            if (size != sizeof(node)) return ::operator new(size);
+            auto& ps = pool_state::get();
+
+            // 1. Fast path: pop from local list.
+            if (ps.fast_list) {
+                void* p = ps.fast_list;
+                ps.fast_list = *reinterpret_cast<void**>(p);
+                --ps.fast_count;
+                return p;
+            }
+
+            // 2. Steal a batch from the global Treiber stack.
+            void* first = treiber_pop();
+            if (first) {
+                for (size_t i = 1; i < kStealBatch; ++i) {
+                    void* q = treiber_pop();
+                    if (!q) break;
+                    *reinterpret_cast<void**>(q) = ps.fast_list;
+                    ps.fast_list = q;
+                    ++ps.fast_count;
+                }
+                return first;
+            }
+
+            // 3. Allocate a fresh chunk from the OS.
+            const int chunk_size = 256;
+            void* chunk = ::operator new(chunk_size * sizeof(node));
+            for (int i = 1; i < chunk_size; ++i) {
+                void* item = static_cast<char*>(chunk) + i * sizeof(node);
+                *reinterpret_cast<void**>(item) = ps.fast_list;
+                ps.fast_list = item;
+            }
+            ps.fast_count += chunk_size - 1;
+            return chunk;
+        }
+
+        static void operator delete(void* p, size_t size) {
+            if (!p) return;
+            if (size != sizeof(node)) { ::operator delete(p); return; }
+
+            auto& ps = pool_state::get();
+            *reinterpret_cast<void**>(p) = ps.fast_list;
+            ps.fast_list = p;
+            ++ps.fast_count;
+
+            // Donate half to global pool when local cache is too large.
+            if (ps.fast_count > kDonateThreshold) {
+                size_t to_donate = ps.fast_count / 2;
+                for (size_t i = 0; i < to_donate; ++i) {
+                    void* q = ps.fast_list;
+                    ps.fast_list = *reinterpret_cast<void**>(q);
+                    --ps.fast_count;
+                    treiber_push(q);
+                }
+            }
+        }
         
         explicit node(const kvasir::utf8_string& str) 
             : cp_length(str.length()), byte_length(str.internal_data().size()), data(str) {}
@@ -201,8 +323,26 @@ public:
         return utf8_rope(new node(lhs.root_, rhs.root_));
     }
 
+    friend utf8_rope operator+(utf8_rope&& lhs, const utf8_rope& rhs) {
+        if (!lhs.root_) return rhs;
+        if (!rhs.root_) return std::move(lhs);
+        
+        if (lhs.root_->ref_count.load(std::memory_order_relaxed) == 1) {
+            if (!lhs.root_->left && !lhs.root_->right) {
+                if (!rhs.root_->left && !rhs.root_->right && lhs.root_->byte_length + rhs.root_->byte_length <= 512) {
+                    lhs.root_->data += rhs.root_->data;
+                    lhs.root_->cp_length += rhs.root_->cp_length;
+                    lhs.root_->byte_length += rhs.root_->byte_length;
+                    return std::move(lhs);
+                }
+            }
+        }
+        
+        return utf8_rope(new node(lhs.root_, rhs.root_));
+    }
+
     utf8_rope& operator+=(const utf8_rope& other) {
-        *this = *this + other;
+        *this = std::move(*this) + other;
         return *this;
     }
 
@@ -214,12 +354,26 @@ public:
         return {utf8_rope(l_root), utf8_rope(r_root)};
     }
 
-    utf8_rope insert(size_t pos, const utf8_rope& other) const {
+    // Fast append: bypass split entirely when adding at end
+    utf8_rope& append(const utf8_rope& other) {
+        *this = std::move(*this) + other;
+        return *this;
+    }
+
+    utf8_rope insert(size_t pos, const utf8_rope& other) const & {
         if (pos == 0) return other + *this;
         if (pos >= length()) return *this + other;
         
         auto [left, right] = split(pos);
         return left + other + right;
+    }
+    
+    utf8_rope insert(size_t pos, const utf8_rope& other) && {
+        if (pos == 0) return other + std::move(*this);
+        if (pos >= length()) return std::move(*this) + other;
+        
+        auto [left, right] = split(pos);
+        return std::move(left) + other + std::move(right);
     }
     
     utf8_rope erase(size_t pos, size_t count = std::string::npos) const {

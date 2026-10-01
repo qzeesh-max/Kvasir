@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.14)
 project(Kvasir CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_COMPILER "/opt/homebrew/bin/g++-16")
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)

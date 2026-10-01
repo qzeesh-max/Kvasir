@@ -7,10 +7,8 @@
 #include <cstring>
 #include <stdexcept>
 #include "hash.hpp"
-#if defined(__ARM_NEON)
-#include <arm_neon.h>
-#elif defined(__AVX2__)
-#include <immintrin.h>
+#if __has_include(<experimental/simd>)
+#include <experimental/simd>
 #endif
 #include <string_view>
 #include <functional>
@@ -197,7 +195,9 @@ public:
             add_fragment(frag, code_point_count_ / kCodePointsPerFragment);
         } else {
             auto& frag = get_mutable_fragment(code_point_count_ / kCodePointsPerFragment);
-            frag.fragmentCharIndexDiffs[local_idx] = static_cast<uint8_t>(logical_size() - frag.fragmentFirstCharIndex);
+            if (local_idx < kFragmentDiffsSize) {
+                frag.fragmentCharIndexDiffs[local_idx] = static_cast<uint8_t>(logical_size() - frag.fragmentFirstCharIndex);
+            }
         }
         code_point_count_++;
     }
@@ -325,39 +325,22 @@ public:
         const uint8_t* p = reinterpret_cast<const uint8_t*>(data_.data());
         size_t cp_decoded = 0;
         
+#if __has_include(<experimental/simd>)
+        using simd8_t  = std::experimental::fixed_size_simd<int8_t,  16>;
+        using simd32_t = std::experimental::fixed_size_simd<uint32_t, 16>;
+        constexpr size_t kSimdWidth = 16;
+#endif
+
         while (cp_decoded < count) {
-#if defined(__ARM_NEON)
-            if (cp_decoded + 16 <= count && byte_idx + 16 <= logical_size()) {
-                uint8x16_t chunk = vld1q_u8(p + byte_idx);
-                uint8x16_t top_bits = vandq_u8(chunk, vdupq_n_u8(0x80));
-                if (vmaxvq_u8(top_bits) == 0) {
-                    uint16x8_t low_16 = vmovl_u8(vget_low_u8(chunk));
-                    uint16x8_t high_16 = vmovl_u8(vget_high_u8(chunk));
-                    uint32x4_t low_32_1 = vmovl_u16(vget_low_u16(low_16));
-                    uint32x4_t low_32_2 = vmovl_u16(vget_high_u16(low_16));
-                    uint32x4_t high_32_1 = vmovl_u16(vget_low_u16(high_16));
-                    uint32x4_t high_32_2 = vmovl_u16(vget_high_u16(high_16));
-                    
-                    vst1q_u32(out + cp_decoded, low_32_1);
-                    vst1q_u32(out + cp_decoded + 4, low_32_2);
-                    vst1q_u32(out + cp_decoded + 8, high_32_1);
-                    vst1q_u32(out + cp_decoded + 12, high_32_2);
-                    
-                    byte_idx += 16;
-                    cp_decoded += 16;
-                    continue;
-                }
-            }
-#elif defined(__AVX2__)
-            if (cp_decoded + 16 <= count && byte_idx + 16 <= logical_size()) {
-                __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p + byte_idx));
-                if (_mm_movemask_epi8(chunk) == 0) {
-                    __m256i low_32 = _mm256_cvtepu8_epi32(chunk);
-                    __m256i high_32 = _mm256_cvtepu8_epi32(_mm_srli_si128(chunk, 8));
-                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(out + cp_decoded), low_32);
-                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(out + cp_decoded + 8), high_32);
-                    byte_idx += 16;
-                    cp_decoded += 16;
+
+#if __has_include(<experimental/simd>)
+            if (cp_decoded + kSimdWidth <= count && byte_idx + kSimdWidth <= logical_size()) {
+                simd8_t chunk(reinterpret_cast<const int8_t*>(p + byte_idx), std::experimental::element_aligned);
+                if (!std::experimental::any_of(chunk < 0)) {
+                    simd32_t expanded = std::experimental::static_simd_cast<uint32_t>(chunk);
+                    expanded.copy_to(out + cp_decoded, std::experimental::element_aligned);
+                    byte_idx += kSimdWidth;
+                    cp_decoded += kSimdWidth;
                     continue;
                 }
             }
@@ -607,21 +590,17 @@ public:
         size_t size = str.size();
         size_t i = 0;
         
+#if __has_include(<experimental/simd>)
+        using vsimd8_t = std::experimental::native_simd<int8_t>;
+        constexpr size_t kVSimdWidth = vsimd8_t::size();
+#endif
+
         while (i < size) {
-#if defined(__ARM_NEON)
-            if (i + 16 <= size) {
-                uint8x16_t chunk = vld1q_u8(p + i);
-                uint8x16_t top_bits = vandq_u8(chunk, vdupq_n_u8(0x80));
-                if (vmaxvq_u8(top_bits) == 0) {
-                    i += 16;
-                    continue;
-                }
-            }
-#elif defined(__AVX2__)
-            if (i + 16 <= size) {
-                __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p + i));
-                if (_mm_movemask_epi8(chunk) == 0) {
-                    i += 16;
+#if __has_include(<experimental/simd>)
+            if (i + kVSimdWidth <= size) {
+                vsimd8_t chunk(reinterpret_cast<const int8_t*>(p + i), std::experimental::element_aligned);
+                if (!std::experimental::any_of(chunk < 0)) {
+                    i += kVSimdWidth;
                     continue;
                 }
             }
