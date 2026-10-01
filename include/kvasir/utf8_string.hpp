@@ -502,7 +502,9 @@ private:
                 if ((chunk & 0x8080808080808080ULL) == 0) {
                     size_t start_diff = byte_idx - frag.fragmentFirstCharIndex;
                     for (size_t i = 0; i < 8; ++i) {
-                        frag.fragmentCharIndexDiffs[local_idx + i] = static_cast<uint8_t>(start_diff + i + 1);
+                        if (local_idx + i < kFragmentDiffsSize) {
+                            frag.fragmentCharIndexDiffs[local_idx + i] = static_cast<uint8_t>(start_diff + i + 1);
+                        }
                     }
                     byte_idx += 8;
                     local_idx += 8;
@@ -515,7 +517,9 @@ private:
             size_t remaining = data_size - byte_idx;
             byte_idx += (cp_len < remaining) ? cp_len : remaining;
             
-            frag.fragmentCharIndexDiffs[local_idx] = static_cast<uint8_t>(byte_idx - frag.fragmentFirstCharIndex);
+            if (local_idx < kFragmentDiffsSize) {
+                frag.fragmentCharIndexDiffs[local_idx] = static_cast<uint8_t>(byte_idx - frag.fragmentFirstCharIndex);
+            }
             
             local_idx++;
             cp_count++;
@@ -556,7 +560,9 @@ private:
                 if ((chunk & 0x8080808080808080ULL) == 0) {
                     size_t start_diff = byte_idx - frag.fragmentFirstCharIndex;
                     for (size_t i = 0; i < 8; ++i) {
-                        frag.fragmentCharIndexDiffs[local_idx + i] = static_cast<uint8_t>(start_diff + i + 1);
+                        if (local_idx + i < kFragmentDiffsSize) {
+                            frag.fragmentCharIndexDiffs[local_idx + i] = static_cast<uint8_t>(start_diff + i + 1);
+                        }
                     }
                     byte_idx += 8;
                     local_idx += 8;
@@ -569,7 +575,9 @@ private:
             size_t remaining = data_size - byte_idx;
             byte_idx += (cp_len < remaining) ? cp_len : remaining;
             
-            frag.fragmentCharIndexDiffs[local_idx] = static_cast<uint8_t>(byte_idx - frag.fragmentFirstCharIndex);
+            if (local_idx < kFragmentDiffsSize) {
+                frag.fragmentCharIndexDiffs[local_idx] = static_cast<uint8_t>(byte_idx - frag.fragmentFirstCharIndex);
+            }
             
             local_idx++;
             cp_count++;
