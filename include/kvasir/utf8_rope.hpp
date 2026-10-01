@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include "utf8_string.hpp"
+#include <iostream>
 #include "hash.hpp"
 namespace kvasir {
 
@@ -115,6 +116,16 @@ private:
         }
     }
 
+    void stream_node(node* n, std::ostream& os) const {
+        if (!n) return;
+        if (!n->left && !n->right) {
+            os << n->data;
+        } else {
+            stream_node(n->left.get(), os);
+            stream_node(n->right.get(), os);
+        }
+    }
+
     void hash_rope_node(node* n, size_t& current_hash) const {
         if (!n) return;
         if (!n->left && !n->right) {
@@ -127,6 +138,8 @@ private:
 
 public:
     utf8_rope() : root_(nullptr) {}
+
+    friend std::ostream& operator<<(std::ostream& os, const utf8_rope& rope);
     
     explicit utf8_rope(std::string_view str) {
         if (!str.empty()) {
@@ -231,6 +244,19 @@ public:
 inline bool operator==(const utf8_rope& lhs, const utf8_rope& rhs) { return lhs.to_string() == rhs.to_string(); }
 inline bool operator!=(const utf8_rope& lhs, const utf8_rope& rhs) { return lhs.to_string() != rhs.to_string(); }
 inline bool operator<(const utf8_rope& lhs, const utf8_rope& rhs) { return lhs.to_string() < rhs.to_string(); }
+
+inline std::ostream& operator<<(std::ostream& os, const utf8_rope& rope) {
+    rope.stream_node(rope.root_.get(), os);
+    return os;
+}
+
+inline std::istream& operator>>(std::istream& is, utf8_rope& rope) {
+    utf8_string temp;
+    if (is >> temp) {
+        rope = utf8_rope(temp);
+    }
+    return is;
+}
 
 } // namespace kvasir
 

@@ -12,9 +12,9 @@
 #elif defined(__AVX2__)
 #include <immintrin.h>
 #endif
-
 #include <string_view>
 #include <functional>
+#include <iostream>
 namespace kvasir {
 
 constexpr size_t kCacheLineSize = 64;
@@ -670,6 +670,18 @@ inline bool operator<(const utf8_string& lhs, const char* rhs) { return lhs.inte
 inline bool operator==(const char* lhs, const utf8_string& rhs) { return std::string_view(lhs) == rhs.internal_data(); }
 inline bool operator!=(const char* lhs, const utf8_string& rhs) { return std::string_view(lhs) != rhs.internal_data(); }
 inline bool operator<(const char* lhs, const utf8_string& rhs) { return std::string_view(lhs) < rhs.internal_data(); }
+
+inline std::ostream& operator<<(std::ostream& os, const utf8_string& str) {
+    return os << str.internal_data();
+}
+
+inline std::istream& operator>>(std::istream& is, utf8_string& str) {
+    std::string temp;
+    if (is >> temp) {
+        str = temp;
+    }
+    return is;
+}
 
 } // namespace kvasir
 

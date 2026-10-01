@@ -1,18 +1,37 @@
 # Kvasir
 
-Kvasir is a UTF-8 string framework in C++ designed to provide fast indexing and iteration by code-point, while matching the interface of `std::string` as much as possible.
+**Mythological Roots**: In Norse mythology, Kvasir was a being born from the blended saliva of the Vanir and the Æsir, renowned for his unparalleled wisdom and ability to answer any question. He traveled the realms spreading knowledge. The Kvasir framework is named in his honor because it acts as a wise, omniscient bridge across the disparate worlds of text representation—seamlessly interpreting and managing the complexities of Unicode.
+
+Kvasir is a modern, high-performance UTF-8 string framework in C++ designed to solve the complexities of handling Unicode in modern applications. It provides fast code-point indexing, iteration, and manipulation while matching the familiar interface of `std::string`. 
+
+## Why Kvasir? (vs. `std::string` and `std::wstring`)
+
+Traditional C++ strings present significant hurdles when dealing with Unicode:
+- **`std::string` (Byte-level)**: Only understands raw bytes. Operations like `.length()`, `[index]`, or `.substr()` act on bytes, meaning multibyte UTF-8 characters get fragmented, resulting in corrupted text, invalid boundaries, and incorrect string lengths. Properly traversing it requires $O(N)$ dynamic decoding at every step.
+- **`std::wstring` (Wide characters)**: Inherently platform-dependent (UTF-16 on Windows, UTF-32 on Unix). UTF-32 wastes massive amounts of memory (4 bytes per ASCII character), destroying CPU cache efficiency. UTF-16 still suffers from surrogate pair fragmentation where a single code point might span two elements. Moreover, communicating over networks or saving to databases almost universally requires UTF-8, forcing costly and continuous transcoding.
+
+**Kvasir** eliminates these issues by giving you the memory footprint of `std::string` (UTF-8) with the $O(1)$ random access capabilities of `std::wstring` (UTF-32). It buys the user:
+1. **Cache-Friendly $O(1)$ Code Point Indexing**: Through a lightweight internal index built dynamically, giving you constant-time random access by code point.
+2. **Memory Efficiency**: Keeps the underlying text purely in UTF-8, ensuring zero overhead for ASCII and seamless IO/network interoperability.
+3. **Safety**: Mutations, iterations, and substrings will *never* break a multibyte sequence.
 
 ## Features
 
 - **Code-Point Indexing**: Fast access to individual Unicode characters through `string[index]`. Kvasir uses a lightweight internal index built during assignment and modification, allowing O(1) code-point indexing within a 64-byte localized cache line fragment.
-- **Dynamic Platform-Agnostic Layout**: `CodePointIndexFragment` evaluates the size of `size_t` at compile-time to maintain a precise 64-byte size (to fit within a standard CPU cache line):
-  - On a 64-bit architecture (`size_t` is 8 bytes), each fragment addresses 57 code points.
-  - On a 32-bit architecture (`size_t` is 4 bytes), each fragment addresses 61 code points.
+- **Dynamic Platform-Agnostic Layout**: `CodePointIndexFragment` evaluates the size of `size_t` at compile-time to maintain a precise 64-byte size (to fit within a standard CPU cache line).
 - **Branchless & SIMD-friendly Parsing**: The index building mechanism relies on a static lookup table and branchless processing, parsing and caching boundaries almost twice as fast as branching approaches. Decoding operations are also branch-free.
 - **`std::string`-like interface**: Provides similar methods, mutators (`append`, `push_back`, `+=`), and characteristics.
 - **UTF-8 Aware Iteration**: Iterate over code points seamlessly using a random access iterator.
-- **View Classes**: Includes `kvasir::utf8_string_view`, a non-owning view class analogous to `std::string_view` for Kvasir strings.
-- **Rope Data Structure**: Includes `kvasir::utf8_rope`, an immutable tree structure for highly efficient large string concatenations, insertions, and deletions where each node preserves the cache-friendly code point metrics.
+- **Rope Data Structure (`kvasir::utf8_rope`)**: An immutable, reference-counted tree structure for highly efficient large string concatenations, insertions, and deletions where each node preserves cache-friendly code point metrics.
+- **Transparent Hashing Compatibility**: Includes a custom, zero-copy FNV-1a hashing mechanism that preserves equivalent `std::hash` transparency across `std::string`, `kvasir::utf8_string`, and `kvasir::utf8_rope`. This allows interoperable use across `std::unordered_map` and associative containers without triggering heap allocations.
+- **I/O Stream Integration**: Full support for `<iostream>` via `operator<<` and `operator>>` across all types. For massive ropes, output streams perform piece-wise flushing of nodes to prevent unnecessary memory allocations.
+
+## Variant-Based Reference Views (`utf8_slice` & `utf8_cow`)
+
+To maximize performance in a system where developers seamlessly alternate between contiguous memory (`utf8_string`) and tree-structured memory (`utf8_rope`), Kvasir uses `std::variant`-backed abstractions to eliminate virtual function overhead:
+
+- **`kvasir::utf8_slice`**: A unified, non-owning, read-only view that acts as a lightweight substring slice over *both* `utf8_string` and `utf8_rope`. Instead of inheriting from a virtual base class, `utf8_slice` stores a `std::variant` pointer. It provides zero-copy substrings, code-point indexing, and length calculations across completely different underlying data structures.
+- **`kvasir::utf8_cow` (Copy-On-Write)**: A unified abstraction designed to transparently pass strings around in large systems without immediately triggering a copy. A `utf8_cow` begins its life completely borrowing its data (referencing either a `utf8_string` or `utf8_rope` internally). When a mutation (like `push_back`) is finally requested, the object transparently upgrades itself into an owned structure, making a deep copy. This minimizes overhead in multithreaded and read-heavy systems where mutation is rare but possible.
 
 ## Efficient Memory Layout
 
@@ -66,7 +85,7 @@ _Time per 1024 repetitive concatenations & insertions:_
 | `BM_Utf8StringConcat/1024`          | 38.5      |
 | `BM_RopeConcat/1024`                | 57.6      |
 
-With our latest optimizations, `append_index` brings `utf8_string` concatenation to an incredibly low 38 microseconds (a massive 1156X speedup from the previous $O(N)$ index-rebuild implementation). `utf8_rope` turns a ~38 microsecond massive string concatenation overhead into a 58 microsecond tree linking operation without needing memory-reallocation, while retaining fast `$O(\log(\text{nodes}))$` code point lookup capabilities. The rope structure was further optimized by replacing standard `shared_ptr` tree linking with internal `intrusive_ptr` nodes, yielding an additional ~33% speedup.
+With our latest optimizations, `append_index` brings `utf8_string` concatenation to an incredibly low 38 microseconds (a massive 1156X speedup from the previous $O(N)$ index-rebuild implementation). `utf8_rope` turns a ~38 microsecond massive string concatenation overhead into a 58 microsecond tree linking operation without needing memory-reallocation, while retaining fast $O(\log(\text{nodes}))$ code point lookup capabilities. The rope structure was further optimized by replacing standard `shared_ptr` tree linking with internal `intrusive_ptr` nodes, yielding an additional ~33% speedup.
 
 ## Development
 
@@ -82,11 +101,15 @@ make -j
 ### Running Tests
 
 ```bash
-./tests/kvasir_tests
+./run_tests.sh
+# OR manually:
+./build_release/tests/kvasir_tests
 ```
 
 ### Running Benchmarks
 
 ```bash
-./benchmarks/kvasir_benchmarks
+./run_benchmarks.sh
+# OR manually:
+./build_release/benchmarks/kvasir_benchmarks
 ```

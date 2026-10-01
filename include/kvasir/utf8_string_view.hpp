@@ -1,6 +1,7 @@
 #pragma once
 
 #include "utf8_string.hpp"
+#include <iostream>
 
 namespace kvasir {
 
@@ -61,6 +62,10 @@ inline bool operator==(const utf8_string_view& lhs, const utf8_string_view& rhs)
         if (lhs[i] != rhs[i]) return false;
     }
     return true;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const utf8_string_view& view) {
+    return os << view.to_string();
 }
 
 } // namespace kvasir
