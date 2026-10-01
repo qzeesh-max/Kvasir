@@ -3,3 +3,4 @@ build_release/
 *.txt
 *.py
 .DS_Store
+!CMakeLists.txt
