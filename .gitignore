@@ -1,0 +1,5 @@
+build/
+build_release/
+*.txt
+*.py
+.DS_Store
