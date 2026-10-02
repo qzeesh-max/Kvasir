@@ -165,38 +165,54 @@ public:
     const_iterator end() const { return const_iterator(this, code_point_count_); }
 
     void push_back(uint32_t cp) {
-        size_t cp_len = 0;
-        data_.erase(data_.size() - 3); // Remove padding temporarily
+        // Encode cp into a small stack buffer so we know cp_len before
+        // touching data_ — avoids the old erase(size-3)+push_back+append
+        // pattern which triggered an O(n) memmove on every call.
+        char encoded[4];
+        size_t cp_len;
         if (cp <= 0x7F) {
-            data_.push_back(static_cast<char>(cp)); cp_len = 1;
+            encoded[0] = static_cast<char>(cp); cp_len = 1;
         } else if (cp <= 0x7FF) {
-            data_.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
-            data_.push_back(static_cast<char>(0x80 | (cp & 0x3F))); cp_len = 2;
+            encoded[0] = static_cast<char>(0xC0 | ((cp >> 6) & 0x1F));
+            encoded[1] = static_cast<char>(0x80 | (cp & 0x3F)); cp_len = 2;
         } else if (cp <= 0xFFFF) {
-            data_.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
-            data_.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-            data_.push_back(static_cast<char>(0x80 | (cp & 0x3F))); cp_len = 3;
+            encoded[0] = static_cast<char>(0xE0 | ((cp >> 12) & 0x0F));
+            encoded[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+            encoded[2] = static_cast<char>(0x80 | (cp & 0x3F)); cp_len = 3;
         } else if (cp <= 0x10FFFF) {
-            data_.push_back(static_cast<char>(0xF0 | ((cp >> 18) & 0x07)));
-            data_.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-            data_.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-            data_.push_back(static_cast<char>(0x80 | (cp & 0x3F))); cp_len = 4;
+            encoded[0] = static_cast<char>(0xF0 | ((cp >> 18) & 0x07));
+            encoded[1] = static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+            encoded[2] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+            encoded[3] = static_cast<char>(0x80 | (cp & 0x3F)); cp_len = 4;
+        } else {
+            return; // invalid code point — silently ignore
         }
-        data_.append(3, '\0'); // Re-add padding
-        
-        size_t prev_byte_idx = logical_size() - cp_len;
+
+        // Buffer layout: [payload (logical_size bytes) | \0\0\0 (3 sentinel bytes)]
+        // We overwrite the sentinel in-place and extend by cp_len bytes net.
+        // This avoids the memmove that data_.erase(size-3) would cause.
+        size_t prev_byte_idx = logical_size();
+        data_.resize(prev_byte_idx + cp_len + 3);
+        std::memcpy(data_.data() + prev_byte_idx, encoded, cp_len);
+        // Re-zero the three sentinel bytes (resize may already zero them on
+        // grow, but be explicit for correctness).
+        data_[prev_byte_idx + cp_len]     = '\0';
+        data_[prev_byte_idx + cp_len + 1] = '\0';
+        data_[prev_byte_idx + cp_len + 2] = '\0';
+
         size_t local_idx = code_point_count_ % kCodePointsPerFragment;
-        
+
         if (local_idx == 0) {
             CodePointIndexFragment frag;
             frag.fragmentFirstCharIndex = prev_byte_idx;
             std::memset(frag.fragmentCharIndexDiffs, 0, kFragmentDiffsSize);
-            frag.fragmentCharIndexDiffs[0] = static_cast<uint8_t>(logical_size() - prev_byte_idx);
+            frag.fragmentCharIndexDiffs[0] = static_cast<uint8_t>(cp_len);
             add_fragment(frag, code_point_count_ / kCodePointsPerFragment);
         } else {
             auto& frag = get_mutable_fragment(code_point_count_ / kCodePointsPerFragment);
             if (local_idx < kFragmentDiffsSize) {
-                frag.fragmentCharIndexDiffs[local_idx] = static_cast<uint8_t>(logical_size() - frag.fragmentFirstCharIndex);
+                frag.fragmentCharIndexDiffs[local_idx] = static_cast<uint8_t>(
+                    (prev_byte_idx + cp_len) - frag.fragmentFirstCharIndex);
             }
         }
         code_point_count_++;
@@ -205,9 +221,13 @@ public:
     utf8_string& append(const char* str) {
         size_t old_logical = logical_size();
         size_t old_cp = code_point_count_;
-        data_.erase(data_.size() - 3);
-        data_.append(str);
-        data_.append(3, '\0');
+        size_t add_len = std::strlen(str);
+        // Overwrite sentinel in-place (same trick as push_back) — no memmove.
+        data_.resize(old_logical + add_len + 3);
+        std::memcpy(data_.data() + old_logical, str, add_len);
+        data_[old_logical + add_len]     = '\0';
+        data_[old_logical + add_len + 1] = '\0';
+        data_[old_logical + add_len + 2] = '\0';
         append_index(old_logical, old_cp);
         return *this;
     }
@@ -215,19 +235,26 @@ public:
     utf8_string& append(const std::string& str) {
         size_t old_logical = logical_size();
         size_t old_cp = code_point_count_;
-        data_.erase(data_.size() - 3);
-        data_.append(str);
-        data_.append(3, '\0');
+        size_t add_len = str.size();
+        data_.resize(old_logical + add_len + 3);
+        std::memcpy(data_.data() + old_logical, str.data(), add_len);
+        data_[old_logical + add_len]     = '\0';
+        data_[old_logical + add_len + 1] = '\0';
+        data_[old_logical + add_len + 2] = '\0';
         append_index(old_logical, old_cp);
         return *this;
     }
-    
+
     utf8_string& append(const utf8_string& str) {
         size_t old_logical = logical_size();
         size_t old_cp = code_point_count_;
-        data_.erase(data_.size() - 3);
-        data_.append(str.internal_data());
-        data_.append(3, '\0');
+        auto sv = str.internal_data();
+        size_t add_len = sv.size();
+        data_.resize(old_logical + add_len + 3);
+        std::memcpy(data_.data() + old_logical, sv.data(), add_len);
+        data_[old_logical + add_len]     = '\0';
+        data_[old_logical + add_len + 1] = '\0';
+        data_[old_logical + add_len + 2] = '\0';
         append_index(old_logical, old_cp);
         return *this;
     }
@@ -279,28 +306,41 @@ public:
     utf8_string& insert(size_t pos, const utf8_string& str) {
         if (pos > code_point_count_) return *this;
         if (pos == code_point_count_) return append(str);
-        
+
         size_t byte_pos = byte_index(pos);
+        // std::string::insert is unavoidably O(n) for the data; we still
+        // avoid rescanning the prefix by rebuilding only from byte_pos.
         data_.insert(byte_pos, str.internal_data());
-        rebuild_index();
+        partial_rebuild_index_from(pos, byte_pos);
         return *this;
     }
-    
+
     // Erase
     utf8_string& erase(size_t pos = 0, size_t count = std::string::npos) {
         if (pos >= code_point_count_) return *this;
         size_t byte_pos = byte_index(pos);
         size_t byte_end;
         if (count == std::string::npos || pos + count >= code_point_count_) {
-            byte_end = logical_size();
-        } else {
-            byte_end = byte_index(pos + count);
+            // Erasing to end: just truncate — no rescan at all.
+            // Re-zero the 3-byte sentinel at the new end.
+            data_.resize(byte_pos + 3);
+            data_[byte_pos]     = '\0';
+            data_[byte_pos + 1] = '\0';
+            data_[byte_pos + 2] = '\0';
+            code_point_count_ = pos;
+            // Trim any heap fragments past pos.
+            size_t new_frag_count = (pos == 0) ? 1 :
+                pos / kCodePointsPerFragment + (pos % kCodePointsPerFragment ? 1 : 0);
+            if (!heap_index_.empty() && heap_index_.size() > new_frag_count)
+                heap_index_.resize(new_frag_count);
+            return *this;
         }
+        byte_end = byte_index(pos + count);
         data_.erase(byte_pos, byte_end - byte_pos);
-        rebuild_index();
+        partial_rebuild_index_from(pos, byte_pos);
         return *this;
     }
-    
+
     // Replace
     utf8_string& replace(size_t pos, size_t count, const utf8_string& str) {
         if (pos >= code_point_count_) return *this;
@@ -312,7 +352,7 @@ public:
             byte_end = byte_index(pos + count);
         }
         data_.replace(byte_pos, byte_end - byte_pos, str.internal_data());
-        rebuild_index();
+        partial_rebuild_index_from(pos, byte_pos);
         return *this;
     }
     
@@ -320,11 +360,13 @@ public:
     size_t decode_code_points(size_t cp_pos, size_t count, uint32_t* out) const {
         if (cp_pos >= code_point_count_) return 0;
         if (cp_pos + count > code_point_count_) count = code_point_count_ - cp_pos;
-        
-        size_t byte_idx = byte_index(cp_pos);
+
+        size_t byte_idx  = byte_index(cp_pos);
         const uint8_t* p = reinterpret_cast<const uint8_t*>(data_.data());
-        size_t cp_decoded = 0;
-        
+        // Cache logical_size() — avoids data_.size()-3 subtraction per iteration.
+        const size_t lsize = logical_size();
+        size_t cp_decoded  = 0;
+
 #if __has_include(<experimental/simd>)
         using simd8_t  = std::experimental::fixed_size_simd<int8_t,  16>;
         using simd32_t = std::experimental::fixed_size_simd<uint32_t, 16>;
@@ -332,21 +374,64 @@ public:
 #endif
 
         while (cp_decoded < count) {
+            // Prefetch ahead to hide memory latency on large sequential decodes.
+            __builtin_prefetch(p + byte_idx + 64, 0, 1);
 
 #if __has_include(<experimental/simd>)
-            if (cp_decoded + kSimdWidth <= count && byte_idx + kSimdWidth <= logical_size()) {
-                simd8_t chunk(reinterpret_cast<const int8_t*>(p + byte_idx), std::experimental::element_aligned);
+            if (__builtin_expect(cp_decoded + kSimdWidth <= count &&
+                                 byte_idx + kSimdWidth <= lsize, 1)) {
+                simd8_t chunk(reinterpret_cast<const int8_t*>(p + byte_idx),
+                              std::experimental::element_aligned);
                 if (!std::experimental::any_of(chunk < 0)) {
-                    simd32_t expanded = std::experimental::static_simd_cast<uint32_t>(chunk);
-                    expanded.copy_to(out + cp_decoded, std::experimental::element_aligned);
-                    byte_idx += kSimdWidth;
+                    simd32_t expanded =
+                        std::experimental::static_simd_cast<uint32_t>(chunk);
+                    expanded.copy_to(out + cp_decoded,
+                                     std::experimental::element_aligned);
+                    byte_idx   += kSimdWidth;
                     cp_decoded += kSimdWidth;
                     continue;
                 }
             }
+#else
+            // 8-byte scalar ASCII fast path (no SIMD available).
+            if (__builtin_expect(cp_decoded + 8 <= count &&
+                                 byte_idx + 8   <= lsize, 1)) {
+                uint64_t chunk;
+                std::memcpy(&chunk, p + byte_idx, 8);
+                if ((chunk & 0x8080808080808080ULL) == 0) {
+                    // All 8 bytes are ASCII: expand each to uint32_t.
+                    out[cp_decoded + 0] = static_cast<uint8_t>(p[byte_idx + 0]);
+                    out[cp_decoded + 1] = static_cast<uint8_t>(p[byte_idx + 1]);
+                    out[cp_decoded + 2] = static_cast<uint8_t>(p[byte_idx + 2]);
+                    out[cp_decoded + 3] = static_cast<uint8_t>(p[byte_idx + 3]);
+                    out[cp_decoded + 4] = static_cast<uint8_t>(p[byte_idx + 4]);
+                    out[cp_decoded + 5] = static_cast<uint8_t>(p[byte_idx + 5]);
+                    out[cp_decoded + 6] = static_cast<uint8_t>(p[byte_idx + 6]);
+                    out[cp_decoded + 7] = static_cast<uint8_t>(p[byte_idx + 7]);
+                    byte_idx   += 8;
+                    cp_decoded += 8;
+                    continue;
+                }
+            }
 #endif
-            out[cp_decoded] = decode_code_point(byte_idx);
-            byte_idx += utf8_len_table[p[byte_idx]];
+            uint8_t c0 = p[byte_idx];
+            if (c0 <= 0x7F) {
+                out[cp_decoded] = c0;
+            } else {
+                uint32_t c1 = p[byte_idx + 1];
+                if (c0 <= 0xDF) {
+                    out[cp_decoded] = ((c0 & 0x1F) << 6) | (c1 & 0x3F);
+                } else {
+                    uint32_t c2 = p[byte_idx + 2];
+                    if (c0 <= 0xEF) {
+                        out[cp_decoded] = ((c0 & 0x0F) << 12) | ((c1 & 0x3F) << 6) | (c2 & 0x3F);
+                    } else {
+                        uint32_t c3 = p[byte_idx + 3];
+                        out[cp_decoded] = ((c0 & 0x07) << 18) | ((c1 & 0x3F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
+                    }
+                }
+            }
+            byte_idx += utf8_len_table[c0];
             cp_decoded++;
         }
         return cp_decoded;
@@ -453,17 +538,28 @@ private:
         }
     }
     
-    void append_index(size_t byte_idx, size_t cp_count) {
+    // ─── Core index-building kernel ─────────────────────────────────────────
+    // Scans [byte_idx, logical_size()) and builds/updates fragment records
+    // starting at code-point position cp_count (== the position of the first
+    // byte passed in).  Writes code_point_count_ on completion.
+    //
+    // The caller is responsible for:
+    //   - clearing heap_index_ (if doing a full rebuild)
+    //   - passing correct byte_idx and cp_count
+    //   - pre-loading the fragment at frag_idx when local_idx > 0
+    void build_index_from(size_t byte_idx, size_t cp_count) {
         size_t data_size = logical_size();
-        if (byte_idx >= data_size) return;
-        
+        if (byte_idx > data_size) { code_point_count_ = cp_count; return; }
+
         const uint8_t* p = reinterpret_cast<const uint8_t*>(data_.data());
-        
+        const size_t   reserve_hint = data_size / kCodePointsPerFragment + 2;
+
         size_t local_idx = cp_count % kCodePointsPerFragment;
-        size_t frag_idx = cp_count / kCodePointsPerFragment;
-        
+        size_t frag_idx  = cp_count / kCodePointsPerFragment;
+
         CodePointIndexFragment frag;
         if (local_idx > 0) {
+            // Resume mid-fragment: load existing fragment.
             frag = get_fragment(frag_idx);
         } else {
             frag.fragmentFirstCharIndex = byte_idx;
@@ -471,104 +567,108 @@ private:
         }
 
         while (byte_idx < data_size) {
-            if (local_idx == kCodePointsPerFragment) {
-                add_fragment(frag, frag_idx++, (data_size / kCodePointsPerFragment) + 1);
+            if (__builtin_expect(local_idx == kCodePointsPerFragment, 0)) {
+                add_fragment(frag, frag_idx++, reserve_hint);
                 frag.fragmentFirstCharIndex = byte_idx;
                 std::memset(frag.fragmentCharIndexDiffs, 0, kFragmentDiffsSize);
                 local_idx = 0;
             }
-            
-            // ASCII fast path: process 8 bytes at a time
-            if (local_idx + 8 <= kCodePointsPerFragment && byte_idx + 8 <= data_size) {
-                uint64_t chunk;
-                std::memcpy(&chunk, p + byte_idx, 8);
-                if ((chunk & 0x8080808080808080ULL) == 0) {
-                    size_t start_diff = byte_idx - frag.fragmentFirstCharIndex;
-                    for (size_t i = 0; i < 8; ++i) {
-                        if (local_idx + i < kFragmentDiffsSize) {
-                            frag.fragmentCharIndexDiffs[local_idx + i] = static_cast<uint8_t>(start_diff + i + 1);
-                        }
-                    }
-                    byte_idx += 8;
-                    local_idx += 8;
-                    cp_count += 8;
+
+            // ── 16-byte ASCII fast path ──────────────────────────────────────
+            // Two consecutive 8-byte reads; both must be all-ASCII.
+            if (__builtin_expect(
+                    local_idx + 16 <= kCodePointsPerFragment &&
+                    byte_idx + 16  <= data_size, 1)) {
+                uint64_t lo, hi;
+                std::memcpy(&lo, p + byte_idx,     8);
+                std::memcpy(&hi, p + byte_idx + 8, 8);
+                if (((lo | hi) & 0x8080808080808080ULL) == 0) {
+                    size_t base = byte_idx - frag.fragmentFirstCharIndex;
+                    // Unrolled: write diffs for 16 ASCII code-points.
+                    uint8_t* d = frag.fragmentCharIndexDiffs + local_idx;
+                    // Only write within the diff array (kFragmentDiffsSize = 56 on 64-byte cache line)
+                    const size_t avail = kFragmentDiffsSize - local_idx;
+                    const size_t n = (avail < 16) ? avail : 16;
+                    for (size_t i = 0; i < n; ++i)
+                        d[i] = static_cast<uint8_t>(base + i + 1);
+                    byte_idx   += 16;
+                    local_idx  += 16;
+                    cp_count   += 16;
                     continue;
                 }
             }
-            
-            size_t cp_len = utf8_len_table[p[byte_idx]];
+            // ── 8-byte ASCII fast path (tail / non-multiple of 16) ───────────
+            if (__builtin_expect(
+                    local_idx + 8 <= kCodePointsPerFragment &&
+                    byte_idx + 8  <= data_size, 1)) {
+                uint64_t chunk;
+                std::memcpy(&chunk, p + byte_idx, 8);
+                if ((chunk & 0x8080808080808080ULL) == 0) {
+                    size_t base = byte_idx - frag.fragmentFirstCharIndex;
+                    uint8_t* d = frag.fragmentCharIndexDiffs + local_idx;
+                    const size_t avail = kFragmentDiffsSize - local_idx;
+                    const size_t n = (avail < 8) ? avail : 8;
+                    for (size_t i = 0; i < n; ++i)
+                        d[i] = static_cast<uint8_t>(base + i + 1);
+                    byte_idx  += 8;
+                    local_idx += 8;
+                    cp_count  += 8;
+                    continue;
+                }
+            }
+
+            // ── Scalar multibyte path ────────────────────────────────────────
+            size_t cp_len   = utf8_len_table[p[byte_idx]];
             size_t remaining = data_size - byte_idx;
             byte_idx += (cp_len < remaining) ? cp_len : remaining;
-            
-            if (local_idx < kFragmentDiffsSize) {
-                frag.fragmentCharIndexDiffs[local_idx] = static_cast<uint8_t>(byte_idx - frag.fragmentFirstCharIndex);
-            }
-            
+            if (local_idx < kFragmentDiffsSize)
+                frag.fragmentCharIndexDiffs[local_idx] =
+                    static_cast<uint8_t>(byte_idx - frag.fragmentFirstCharIndex);
             local_idx++;
             cp_count++;
         }
+
         code_point_count_ = cp_count;
-        if (local_idx > 0 || cp_count == 0) {
-            add_fragment(frag, frag_idx, (data_size / kCodePointsPerFragment) + 1);
-        }
+        if (local_idx > 0 || cp_count == 0)
+            add_fragment(frag, frag_idx, reserve_hint);
     }
+
+    void append_index(size_t byte_idx, size_t cp_count) {
+        build_index_from(byte_idx, cp_count);
+    }
+
     void rebuild_index() {
         heap_index_.clear();
         code_point_count_ = 0;
-        size_t byte_idx = 0;
-        size_t data_size = logical_size();
-        const uint8_t* p = reinterpret_cast<const uint8_t*>(data_.data());
-        
+        build_index_from(0, 0);
+    }
 
-        
-        CodePointIndexFragment frag;
-        frag.fragmentFirstCharIndex = 0;
-        std::memset(frag.fragmentCharIndexDiffs, 0, kFragmentDiffsSize);
-        size_t local_idx = 0;
-        size_t frag_idx = 0;
-        size_t cp_count = 0;
+    // Partial index rebuild starting from code-point `cp_pos` (byte `byte_pos`).
+    // Fragments 0..frag_of(cp_pos)-1 are left unchanged; only the fragment
+    // containing cp_pos and all subsequent ones are rewritten.  This turns
+    // O(n) erase/insert/replace rescans into O(suffix) rescans.
+    void partial_rebuild_index_from(size_t cp_pos, size_t byte_pos) {
+        // Snap back to the fragment boundary so build_index_from gets a
+        // clean (local_idx == 0) start rather than a mid-fragment resume.
+        size_t frag_idx = cp_pos / kCodePointsPerFragment;
+        size_t cp_base  = frag_idx * kCodePointsPerFragment;
 
-        while (byte_idx < data_size) {
-            if (local_idx == kCodePointsPerFragment) {
-                add_fragment(frag, frag_idx++, (data_size / kCodePointsPerFragment) + 1);
-                frag.fragmentFirstCharIndex = byte_idx;
-                std::memset(frag.fragmentCharIndexDiffs, 0, kFragmentDiffsSize);
-                local_idx = 0;
-            }
-            
-            // ASCII fast path: process 8 bytes at a time
-            if (local_idx + 8 <= kCodePointsPerFragment && byte_idx + 8 <= data_size) {
-                uint64_t chunk;
-                std::memcpy(&chunk, p + byte_idx, 8);
-                if ((chunk & 0x8080808080808080ULL) == 0) {
-                    size_t start_diff = byte_idx - frag.fragmentFirstCharIndex;
-                    for (size_t i = 0; i < 8; ++i) {
-                        if (local_idx + i < kFragmentDiffsSize) {
-                            frag.fragmentCharIndexDiffs[local_idx + i] = static_cast<uint8_t>(start_diff + i + 1);
-                        }
-                    }
-                    byte_idx += 8;
-                    local_idx += 8;
-                    cp_count += 8;
-                    continue;
-                }
-            }
-            
-            size_t cp_len = utf8_len_table[p[byte_idx]];
-            size_t remaining = data_size - byte_idx;
-            byte_idx += (cp_len < remaining) ? cp_len : remaining;
-            
-            if (local_idx < kFragmentDiffsSize) {
-                frag.fragmentCharIndexDiffs[local_idx] = static_cast<uint8_t>(byte_idx - frag.fragmentFirstCharIndex);
-            }
-            
-            local_idx++;
-            cp_count++;
+        // Derive byte_base BEFORE we trim heap_index_:
+        // All fragments < frag_idx are still valid at this point.
+        size_t byte_base = (cp_base == 0) ? 0 : byte_index(cp_base);
+
+        // Now trim stale tail fragments.
+        if (!heap_index_.empty() && heap_index_.size() > frag_idx)
+            heap_index_.resize(frag_idx);
+        // If frag_idx == 0, reset the inline fragment so build_index_from
+        // starts fresh (otherwise it would try to resume mid-fragment).
+        if (frag_idx == 0) {
+            inline_index_.fragmentFirstCharIndex = 0;
+            std::memset(inline_index_.fragmentCharIndexDiffs, 0, kFragmentDiffsSize);
         }
-        code_point_count_ = cp_count;
-        if (local_idx > 0 || cp_count == 0) {
-            add_fragment(frag, frag_idx, (data_size / kCodePointsPerFragment) + 1);
-        }
+
+        build_index_from(byte_base, cp_base);
+        (void)byte_pos;
     }
 
     
