@@ -41,21 +41,26 @@ echo ""
 echo "─── Line + Branch Summary (include/kvasir only) ───"
 gcovr \
   --root . \
-  --filter "include/kvasir/" \
+  --filter ".*include/kvasir/.*" \
   --exclude-unreachable-branches \
   --exclude-throw-branches \
   --object-directory "$BUILD_DIR" \
-  --sort-percentage \
+  --gcov-executable=/opt/homebrew/bin/gcov-16 \
+  --gcov-ignore-parse-errors=negative_hits.warn \
+  --sort-uncovered \
   --print-summary 2>&1
 
 echo ""
 echo "─── Generating HTML report → $REPORT_DIR ───"
+mkdir -p "$REPORT_DIR"
 gcovr \
   --root . \
-  --filter "include/kvasir/" \
+  --filter ".*include/kvasir/.*" \
   --exclude-unreachable-branches \
   --exclude-throw-branches \
   --object-directory "$BUILD_DIR" \
+  --gcov-executable=/opt/homebrew/bin/gcov-16 \
+  --gcov-ignore-parse-errors=negative_hits.warn \
   --html-details "$REPORT_DIR/index.html" 2>&1
 
 echo ""

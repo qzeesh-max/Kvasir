@@ -105,6 +105,13 @@ TEST(PerfCorrectness, PushBack_MaxCodePoint) {
     EXPECT_EQ(s[0], 0x10FFFFu);
 }
 
+TEST(PerfCorrectness, PushBack_InvalidCodePoint) {
+    utf8_string s("hello");
+    s.push_back(0x110000); // Invalid code point (too large)
+    s.push_back(0x200000); // Invalid code point
+    ASSERT_EQ(s.length(), 5u); // Should silently ignore
+}
+
 TEST(PerfCorrectness, PushBack_AllWidths_SameString) {
     // Push one of each width, then verify all 4 are correct.
     utf8_string s;
@@ -244,6 +251,19 @@ TEST(PerfCorrectness, Erase_NposErasesToEnd) {
     for (size_t i = 0; i < 10; ++i) EXPECT_EQ(s[i], cps[i]);
 }
 
+TEST(PerfCorrectness, Erase_LargeString_HeapIndexShrink) {
+    // Generate a string large enough to populate heap_index_ (>1024 cps)
+    std::vector<uint32_t> cps = gen_mixed_cps(2000);
+    utf8_string s = from_cps(cps);
+    
+    // Erase enough to shrink the heap_index_ size.
+    // 2000 code points = 16 fragments (128 code points each).
+    // Erasing from 500 to end shrinks the fragments to 500/128 + 1 = 4 fragments.
+    s.erase(500, std::string::npos);
+    ASSERT_EQ(s.length(), 500u);
+    for (size_t i = 0; i < 500; ++i) EXPECT_EQ(s[i], cps[i]);
+}
+
 // ─── E. replace correctness ───────────────────────────────────────────────────
 
 TEST(PerfCorrectness, Replace_SameLength) {
@@ -277,6 +297,39 @@ TEST(PerfCorrectness, Replace_LongerReplacement) {
     ASSERT_EQ(s.length(), 27u);
     for (size_t i = 0; i < 5; ++i) EXPECT_EQ(s[i], cps[i]);
     for (size_t i = 15; i < 27; ++i) EXPECT_EQ(s[i], cps[i - 7]);
+}
+
+TEST(PerfCorrectness, Replace_LargeString_HeapIndexShrink) {
+    std::vector<uint32_t> cps = gen_mixed_cps(2000);
+    utf8_string s = from_cps(cps);
+    utf8_string repl = from_cps({0x41});
+    // Replace from 500 to the end with a single character.
+    // 2000 > 1024 so heap_index_ has fragments.
+    // frag_idx for 500 is 500 / 128 = 3.
+    // The replace will call partial_rebuild_index_from(500, byte_pos)
+    // which shrinks the heap_index_ to size 3.
+    s.replace(500, std::string::npos, repl);
+    ASSERT_EQ(s.length(), 501u);
+    EXPECT_EQ(s[500], 0x41u);
+}
+
+TEST(PerfCorrectness, Replace_NposAndBeyond) {
+    std::vector<uint32_t> cps = gen_mixed_cps(20);
+    utf8_string s1 = from_cps(cps);
+    utf8_string repl = from_cps({0x41, 0x42}); // "AB"
+    
+    // Replace using npos
+    s1.replace(10, std::string::npos, repl);
+    ASSERT_EQ(s1.length(), 12u);
+    EXPECT_EQ(s1[10], 0x41u);
+    EXPECT_EQ(s1[11], 0x42u);
+    
+    // Replace with count extending past string length
+    utf8_string s2 = from_cps(cps);
+    s2.replace(15, 100, repl);
+    ASSERT_EQ(s2.length(), 17u);
+    EXPECT_EQ(s2[15], 0x41u);
+    EXPECT_EQ(s2[16], 0x42u);
 }
 
 // ─── F. Batch decode vs. individual operator[] ───────────────────────────────
