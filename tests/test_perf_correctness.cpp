@@ -467,6 +467,22 @@ TEST(PerfCorrectness, ValidateUtf8_InvalidMidSequence) {
 
 // ─── J. Large-string index fragmentation ─────────────────────────────────────
 
+TEST(PerfCorrectness, ValidateUtf8_ExceedsU10FFFF) {
+    // F5 80 80 80 is mathematically a 4-byte sequence but defines a scalar > 10FFFF.
+    std::string bad = "\xF5\x80\x80\x80";
+    EXPECT_FALSE(kvasir::utf8_string::validate_utf8(bad));
+}
+
+TEST(PerfCorrectness, PushBack_RejectsSurrogate) {
+    kvasir::utf8_string s;
+    s.push_back(0xD800);
+    s.push_back(0xDFFF);
+    EXPECT_EQ(s.length(), 0u);
+    s.push_back(0x41);
+    EXPECT_EQ(s.length(), 1u);
+    EXPECT_EQ(s[0], 0x41u);
+}
+
 TEST(PerfCorrectness, LargeString_FragmentTransitions) {
     // Build string of exactly 3 * kCodePointsPerFragment = 180 code-points.
     // Verify that the fragment boundary code-points are indexed correctly.

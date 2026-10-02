@@ -176,6 +176,7 @@ public:
             encoded[0] = static_cast<char>(0xC0 | ((cp >> 6) & 0x1F));
             encoded[1] = static_cast<char>(0x80 | (cp & 0x3F)); cp_len = 2;
         } else if (cp <= 0xFFFF) {
+            if (cp >= 0xD800 && cp <= 0xDFFF) return; // invalid surrogate
             encoded[0] = static_cast<char>(0xE0 | ((cp >> 12) & 0x0F));
             encoded[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
             encoded[2] = static_cast<char>(0x80 | (cp & 0x3F)); cp_len = 3;
@@ -728,6 +729,7 @@ public:
                 if (first == 0xE0 && p[i+1] < 0xA0) return false; // Overlong
                 if (first == 0xED && p[i+1] >= 0xA0) return false; // Surrogates
             } else if (cp_len == 4) {
+                if (first > 0xF4) return false; // Exceeds U+10FFFF limit
                 if ((p[i+1] & 0xC0) != 0x80 || (p[i+2] & 0xC0) != 0x80 || (p[i+3] & 0xC0) != 0x80) return false;
                 if (first == 0xF0 && p[i+1] < 0x90) return false; // Overlong
                 if (first == 0xF4 && p[i+1] >= 0x90) return false; // Out of bounds
