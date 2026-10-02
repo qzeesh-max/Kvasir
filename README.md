@@ -63,19 +63,19 @@ _Tested on a roughly 140-character mixed ASCII and multibyte UTF-8 string:_
 
 | Benchmark                           | Time (ns) |
 |-------------------------------------|-----------|
-| `BM_StdStringCreation`              | 11.0      |
-| `BM_StdWstringCreation`             | 22.8      |
-| `BM_KvasirUtf8StringCreation`       | 87.0      |
-| `BM_StdStringIteration` (byte)      | 40.3      |
-| `BM_StdWstringIteration` (wchar)    | 40.9      |
-| `BM_KvasirUtf8StringIteration` (cp) | 279       |
-| `BM_StdStringIndexing` (byte)       | 42.4      |
-| `BM_StdWstringIndexing` (wchar)     | 39.3      |
-| `BM_KvasirUtf8StringIndexing` (cp)  | 110       |
+| `BM_StdStringCreation`              | 11.1      |
+| `BM_StdWstringCreation`             | 30.8      |
+| `BM_KvasirUtf8StringCreation`       | 103       |
+| `BM_StdStringIteration` (byte)      | 43.4      |
+| `BM_StdWstringIteration` (wchar)    | 41.4      |
+| `BM_KvasirUtf8StringIteration` (cp) | 253       |
+| `BM_StdStringIndexing` (byte)       | 49.5      |
+| `BM_StdWstringIndexing` (wchar)     | 40.8      |
+| `BM_KvasirUtf8StringIndexing` (cp)  | 162       |
 
-Creation time is heavily optimized via 64-bit chunk processing and ASCII fast paths. By checking for pure ASCII within 16-byte blocks using unrolled `uint64_t` bitwise masking `(chunk & 0x8080...) == 0`, code point index fragments are pre-populated sequentially, driving UTF-8 string creation down to an astonishing **86ns** for 140 bytes of mixed text.
+Creation time is heavily optimized via 64-bit chunk processing and ASCII fast paths. By checking for pure ASCII within 16-byte blocks using unrolled `uint64_t` bitwise masking `(chunk & 0x8080...) == 0`, code point index fragments are pre-populated sequentially, driving UTF-8 string creation down to an astonishing **~100ns** for 140 bytes of mixed text.
 
-While sequential iteration is physically bounded by the computational effort of decoding multi-byte sequences into `uint32_t` code points dynamically, our O(1) cache line offset `CodePointIndexFragment` layout allows direct random-access indexing to run extremely fast: a mere ~110ns to perform 140 random-access lookups.
+While sequential iteration is physically bounded by the computational effort of decoding multi-byte sequences into `uint32_t` code points dynamically, our O(1) cache line offset `CodePointIndexFragment` layout allows direct random-access indexing to run extremely fast: a mere ~160ns to perform 140 random-access lookups.
 
 ### The Power of ILP (Instruction-Level Parallelism)
 
@@ -91,16 +91,16 @@ _Time per 1024 repetitive concatenations & insertions:_
 
 | Benchmark                           | Time (us) |
 |-------------------------------------|-----------|
-| `BM_Utf8StringInsert/1024`          | 15.2      |
-| `BM_RopeInsert/1024`                | 58.0      |
+| `BM_Utf8StringInsert/1024`          | 13.9      |
+| `BM_RopeInsert/1024`                | 52.7      |
 | `BM_Utf8StringConcat/1024`          | 38.5      |
 | `BM_RopeConcat/1024`                | 57.6      |
 
-With our latest optimizations, `append_index` brings `utf8_string` concatenation to an incredibly low 38 microseconds (a massive 1156X speedup from previous naive implementations). `utf8_rope` turns massive string concatenation overhead into a 58 microsecond tree linking operation without needing memory-reallocation. The rope structure is further optimized by replacing standard `shared_ptr` tree linking with internal `intrusive_ptr` nodes and a lock-free memory pool, yielding immense multi-threaded throughput.
+With our latest optimizations, `append_index` brings `utf8_string` concatenation to an incredibly low 38.5 microseconds. `utf8_rope` turns massive string concatenation overhead into a ~57 microsecond tree linking operation without needing memory-reallocation. The rope structure is further optimized by replacing standard `shared_ptr` tree linking with internal `intrusive_ptr` nodes and a lock-free memory pool, yielding immense multi-threaded throughput.
 
 ## Testing & Coverage
 
-Kvasir is rigorously tested with over **120 test suites** covering edge-case UTF-8 bounds, large fragment transitions, and memory lifecycle invariants. The core `utf8_string` features **100% line execution coverage**. Additionally, comprehensive Google ThreadSanitizer (TSAN) test suites assert thread-safety across concurrent rope read/writes, multi-threaded ref-count overflows, and lock-free Treiber stack operations.
+Kvasir is rigorously tested with over **120 test suites** covering edge-case UTF-8 bounds, large fragment transitions, and memory lifecycle invariants. The core `utf8_string` features **>99% line execution coverage**. Additionally, comprehensive Google ThreadSanitizer (TSAN) test suites assert thread-safety across concurrent rope read/writes, multi-threaded ref-count overflows, and lock-free Treiber stack operations.
 
 ## Development
 
