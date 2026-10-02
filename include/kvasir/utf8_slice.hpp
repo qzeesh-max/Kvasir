@@ -1,6 +1,7 @@
 #pragma once
 
 #include "utf8_string.hpp"
+#include "utf8_string_view.hpp"
 #include "utf8_rope.hpp"
 #include <variant>
 #include <algorithm>
@@ -66,11 +67,38 @@ public:
     }
 
     utf8_string to_string() const {
-        utf8_string res;
-        for (size_t i = 0; i < len_; ++i) {
-            res.push_back((*this)[i]);
-        }
-        return res;
+        return std::visit([this](auto&& arg) -> utf8_string {
+            if (!arg) return utf8_string();
+            using T = std::decay_t<decltype(*arg)>;
+            if constexpr (std::is_same_v<T, utf8_string>) {
+                return arg->substr(start_, len_);
+            } else {
+                utf8_string res;
+                for (size_t i = 0; i < len_; ++i) {
+                    res.push_back((*arg)[start_ + i]);
+                }
+                return res;
+            }
+        }, source_);
+    }
+
+    void stream_to(std::ostream& os) const {
+        std::visit([&os, this](auto&& arg) {
+            if (!arg) return;
+            using T = std::decay_t<decltype(*arg)>;
+            if constexpr (std::is_same_v<T, utf8_string>) {
+                os << utf8_string_view(*arg, start_, len_);
+            } else {
+                for (size_t i = 0; i < len_; ++i) {
+                    uint32_t cp = (*arg)[start_ + i];
+                    // Stream out as utf-8 directly (or just use push_back into a string for now)
+                    // Given time, we could write the bytes directly, but this is safe:
+                    utf8_string tmp;
+                    tmp.push_back(cp);
+                    os << tmp;
+                }
+            }
+        }, source_);
     }
 };
 
@@ -87,7 +115,8 @@ inline bool operator!=(const utf8_slice& lhs, const utf8_slice& rhs) {
 }
 
 inline std::ostream& operator<<(std::ostream& os, const utf8_slice& slice) {
-    return os << slice.to_string();
+    slice.stream_to(os);
+    return os;
 }
 
 } // namespace kvasir

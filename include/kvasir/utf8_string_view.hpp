@@ -6,6 +6,7 @@
 namespace kvasir {
 
 class utf8_string_view {
+    friend std::ostream& operator<<(std::ostream& os, const utf8_string_view& view);
 public:
     utf8_string_view() : str_(nullptr), start_(0), len_(0) {}
     utf8_string_view(const utf8_string& str) : str_(&str), start_(0), len_(str.length()) {}
@@ -43,11 +44,14 @@ public:
     // Convert back to utf8_string
     utf8_string to_string() const {
         if (!str_ || len_ == 0) return utf8_string();
-        utf8_string res;
-        for (size_t i = 0; i < len_; ++i) {
-            res.push_back((*str_)[start_ + i]);
-        }
-        return res;
+        return str_->substr(start_, len_);
+    }
+
+    void stream_to(std::ostream& os) const {
+        if (!str_ || len_ == 0) return;
+        size_t b_start = str_->byte_index(start_);
+        size_t b_end = str_->byte_index(start_ + len_);
+        os << str_->internal_data().substr(b_start, b_end - b_start);
     }
 
 private:
@@ -65,7 +69,8 @@ inline bool operator==(const utf8_string_view& lhs, const utf8_string_view& rhs)
 }
 
 inline std::ostream& operator<<(std::ostream& os, const utf8_string_view& view) {
-    return os << view.to_string();
+    view.stream_to(os);
+    return os;
 }
 
 } // namespace kvasir

@@ -36,6 +36,7 @@ static constexpr uint8_t utf8_len_table[256] = {
 };
 
 class utf8_string {
+    friend class utf8_string_view;
 public:
     utf8_string() : code_point_count_(0), inline_index_{0, {}} {
         data_.append(3, '\0');
@@ -164,7 +165,7 @@ public:
     const_iterator begin() const { return const_iterator(this, 0); }
     const_iterator end() const { return const_iterator(this, code_point_count_); }
 
-    void push_back(uint32_t cp) {
+    bool push_back(uint32_t cp) {
         // Encode cp into a small stack buffer so we know cp_len before
         // touching data_ — avoids the old erase(size-3)+push_back+append
         // pattern which triggered an O(n) memmove on every call.
@@ -176,7 +177,7 @@ public:
             encoded[0] = static_cast<char>(0xC0 | ((cp >> 6) & 0x1F));
             encoded[1] = static_cast<char>(0x80 | (cp & 0x3F)); cp_len = 2;
         } else if (cp <= 0xFFFF) {
-            if (cp >= 0xD800 && cp <= 0xDFFF) return; // invalid surrogate
+            if (cp >= 0xD800 && cp <= 0xDFFF) return false; // invalid surrogate
             encoded[0] = static_cast<char>(0xE0 | ((cp >> 12) & 0x0F));
             encoded[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
             encoded[2] = static_cast<char>(0x80 | (cp & 0x3F)); cp_len = 3;
@@ -186,7 +187,7 @@ public:
             encoded[2] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
             encoded[3] = static_cast<char>(0x80 | (cp & 0x3F)); cp_len = 4;
         } else {
-            return; // invalid code point — silently ignore
+            return false; // invalid code point
         }
 
         // Buffer layout: [payload (logical_size bytes) | \0\0\0 (3 sentinel bytes)]
@@ -217,6 +218,7 @@ public:
             }
         }
         code_point_count_++;
+        return true;
     }
 
     utf8_string& append(const char* str) {
