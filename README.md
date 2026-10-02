@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="assets/kvasir-logo.png" width="600" alt="Kvasir Logo">
+</div>
+
 # Kvasir
 
 **Mythological Roots**: In Norse mythology, Kvasir was a being born from the blended saliva of the Vanir and the Æsir, renowned for his unparalleled wisdom and ability to answer any question. He traveled the realms spreading knowledge. The Kvasir framework is named in his honor because it acts as a wise, omniscient bridge across the disparate worlds of text representation—seamlessly interpreting and managing the complexities of Unicode.
